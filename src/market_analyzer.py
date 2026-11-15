@@ -289,6 +289,21 @@ class MarketAnalyzer:
             getattr(getattr(self, "config", None), "report_language", "zh")
         )
 
+    _INDEX_NAME_EN = {
+        "标普500指数": "S&P 500",
+        "道琼斯工业指数": "Dow Jones",
+        "纳斯达克综合指数": "Nasdaq Composite",
+        "纳斯达克100指数": "Nasdaq 100",
+        "VIX恐慌指数": "VIX",
+        "罗素2000指数": "Russell 2000",
+    }
+
+    def _localize_index_name(self, name):
+        """Use English index names when the report is not Chinese."""
+        if self._get_output_language() == "zh":
+            return name
+        return self._INDEX_NAME_EN.get(name, name)
+
     def _get_review_language(self) -> str:
         # Structural/template language. Korean reuses the English scaffolding;
         # the Korean output directive is applied in the prompt builder.
@@ -625,7 +640,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 for item in data_list:
                     index = MarketIndex(
                         code=item['code'],
-                        name=item['name'],
+                        name=self._localize_index_name(item['name']),
                         current=item['current'],
                         change=item['change'],
                         change_pct=item['change_pct'],
