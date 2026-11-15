@@ -60,8 +60,8 @@ def _request(url, method="GET", data=None, headers=None, timeout=30):
         return json.loads(raw) if raw else {}
 
 
-def tg(method, timeout=30, **params):
-    return _request(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}", "POST", params, timeout=timeout)
+def tg(method, http_timeout=30, **params):
+    return _request(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}", "POST", params, timeout=http_timeout)
 
 
 def gh(path, method="GET", data=None):
@@ -242,7 +242,7 @@ def main():
         params = {"timeout": wait, "allowed_updates": ["message", "callback_query"]}
         if offset is not None:
             params["offset"] = offset
-        updates = tg("getUpdates", timeout=wait + 15, **params).get("result", [])
+        updates = tg("getUpdates", http_timeout=wait + 15, **params).get("result", [])
         if updates:
             if codes is None:
                 codes = load_list()
