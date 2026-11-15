@@ -362,6 +362,17 @@ class NotificationService(
 
         return normalize_report_language(getattr(get_config(), "report_language", "zh"))
 
+    def _koreanize_if_needed(self, content: Any) -> Any:
+        """Translate leftover English template phrases in Korean reports."""
+        if not isinstance(content, str) or self._get_report_language() != "ko":
+            return content
+        try:
+            from src.ko_postprocess import koreanize_report
+            return koreanize_report(content)
+        except Exception as exc:  # never block a notification over wording
+            logger.warning("Korean post-processing skipped: %s", exc)
+            return content
+
     def _get_labels(self, payload: Optional[Any] = None) -> Dict[str, str]:
         return get_report_labels(self._get_report_language(payload))
 
@@ -2689,6 +2700,7 @@ class NotificationService(
         Returns:
             Structured dispatch diagnostics.
         """
+        content = self._koreanize_if_needed(content)
         context_success = self.send_to_context(content)
         if not self.should_broadcast_static_channels():
             if context_success:
@@ -2927,6 +2939,7 @@ class NotificationService(
         reports_dir.mkdir(parents=True, exist_ok=True)
 
         filepath = reports_dir / filename
+        content = self._koreanize_if_needed(content)
 
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
