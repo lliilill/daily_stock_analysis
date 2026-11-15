@@ -28,16 +28,20 @@ CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-^=]{0,19}$")
 
 BTN_LIST, BTN_ADD, BTN_DEL, BTN_HELP = "📋 목록", "➕ 추가", "➖ 삭제", "❓ 도움말"
 ADD_PROMPT = "➕ 추가할 종목 코드를 이 메시지에 답장으로 보내 주세요."
-MAIN_KEYBOARD = {
-    "keyboard": [[BTN_LIST, BTN_ADD, BTN_DEL, BTN_HELP]],
-    "resize_keyboard": True,
-    "is_persistent": True,
-}
+# Replies remove the old under-the-chat keyboard; the menu button (left of
+# the message box) lists the commands instead.
+MAIN_KEYBOARD = {"remove_keyboard": True}
+BOT_COMMANDS = [
+    {"command": "list", "description": "📋 현재 종목 보기"},
+    {"command": "add", "description": "➕ 종목 추가"},
+    {"command": "remove", "description": "➖ 종목 삭제"},
+    {"command": "help", "description": "❓ 도움말"},
+]
 HELP = (
-    "📋 종목 관리\n"
-    f"{BTN_LIST} - 현재 종목 보기\n"
-    f"{BTN_ADD} - 코드를 답장으로 보내면 추가\n"
-    f"{BTN_DEL} - 종목 버튼을 눌러 삭제\n\n"
+    "📋 종목 관리 (입력창 왼쪽 메뉴 버튼)\n"
+    "/list - 현재 종목 보기\n"
+    "/add - 코드를 답장으로 보내면 추가\n"
+    "/remove - 종목 버튼을 눌러 삭제\n\n"
     "코드 예) NVDA, 005930.KS(코스피), 247540.KQ(코스닥)\n"
     "글자로도 돼요: 추가 NVDA / 삭제 JEPI / 설정 AAPL,MSFT\n"
     "바뀐 목록은 다음 정기 분석부터 적용돼요.\n"
@@ -229,10 +233,20 @@ def process(updates, codes):
     return codes
 
 
+def setup_menu():
+    """Register the command list and show it behind the chat's menu button."""
+    try:
+        tg("setMyCommands", commands=BOT_COMMANDS)
+        tg("setChatMenuButton", chat_id=int(CHAT_ID), menu_button={"type": "commands"})
+    except (urllib.error.HTTPError, ValueError) as exc:
+        print(f"menu setup skipped: {exc}")
+
+
 def main():
     if not GH_TOKEN:
         print("GH_VARIABLES_TOKEN secret is not set; skipping (messages stay queued).")
         return
+    setup_menu()
     deadline = time.time() + RUN_SECONDS
     offset = None
     codes = None
