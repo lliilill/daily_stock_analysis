@@ -29,7 +29,7 @@ CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-^=]{0,19}$")
 BTN_LIST, BTN_ADD, BTN_DEL, BTN_HELP = "📋 목록", "➕ 추가", "➖ 삭제", "❓ 도움말"
 ADD_PROMPT = "➕ 추가할 종목 코드를 이 메시지에 답장으로 보내 주세요."
 MAIN_KEYBOARD = {
-    "keyboard": [[BTN_LIST, BTN_ADD], [BTN_DEL, BTN_HELP]],
+    "keyboard": [[BTN_LIST, BTN_ADD, BTN_DEL, BTN_HELP]],
     "resize_keyboard": True,
     "is_persistent": True,
 }
