@@ -2,7 +2,10 @@ name: 텔레그램 종목 관리
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # GitHub may start scheduled runs late
+    # KST 07:07 09:07 12:07 15:07 17:37 18:37 21:07 23:07 (each run listens ~9 min).
+    # Fewer fixed times instead of every 10 min: GitHub skipped most 10-min runs.
+    - cron: '7 22,0,3,6,12,14 * * *'
+    - cron: '37 8,9 * * *'   # 17:37 and 18:37 KST, before the 19:00 report
   workflow_dispatch:
 
 concurrency:
