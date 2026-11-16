@@ -16,6 +16,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -23,11 +24,17 @@ CHAT_ID = str(os.environ["TELEGRAM_CHAT_ID"]).strip()
 GH_TOKEN = os.environ.get("GH_VARIABLES_TOKEN", "").strip()
 REPO = os.environ["GITHUB_REPOSITORY"]
 RUN_SECONDS = int(os.environ.get("BOT_RUN_SECONDS", "0") or 0)
+ACTIONS_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+ANALYSIS_WORKFLOW = "00-daily-analysis.yml"
 VAR_NAME = "STOCK_LIST"
 CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-^=]{0,19}$")
+HANGUL_RE = re.compile(r"[가-힣]")
+# Naver market -> Yahoo-style suffix used by the analysis code
+KR_SUFFIX = {"KOSPI": ".KS", "KOSDAQ": ".KQ", "KONEX": ".KQ"}
 
 BTN_LIST, BTN_ADD, BTN_DEL, BTN_HELP = "📋 목록", "➕ 추가", "➖ 삭제", "❓ 도움말"
-ADD_PROMPT = "➕ 추가할 종목 코드를 이 메시지에 답장으로 보내 주세요."
+ADD_PROMPT = "➕ 추가할 종목 코드나 이름을 이 메시지에 답장으로 보내 주세요."
+ANALYZE_PROMPT = "🔍 바로 분석할 종목 코드나 이름을 이 메시지에 답장으로 보내 주세요."
 # Replies remove the old under-the-chat keyboard; the menu button (left of
 # the message box) lists the commands instead.
 MAIN_KEYBOARD = {"remove_keyboard": True}
@@ -35,20 +42,24 @@ BOT_COMMANDS = [
     {"command": "list", "description": "📋 현재 종목 보기"},
     {"command": "add", "description": "➕ 종목 추가"},
     {"command": "remove", "description": "➖ 종목 삭제"},
+    {"command": "analyze", "description": "🔍 목록에 없는 종목도 바로 분석"},
     {"command": "help", "description": "❓ 도움말"},
 ]
 HELP = (
     "📋 종목 관리 (입력창 왼쪽 메뉴 버튼)\n"
     "/list - 현재 종목 보기\n"
-    "/add - 코드를 답장으로 보내면 추가\n"
-    "/remove - 종목 버튼을 눌러 삭제\n\n"
+    "/add - 코드나 이름을 답장으로 보내면 추가\n"
+    "/remove - 종목 버튼을 눌러 삭제\n"
+    "/analyze - 목록과 상관없이 그 종목만 바로 분석\n\n"
     "코드 예) NVDA, 005930.KS(코스피), 247540.KQ(코스닥)\n"
-    "글자로도 돼요: 추가 NVDA / 삭제 JEPI / 설정 AAPL,MSFT\n"
+    "한글 이름도 돼요: 삼성전자, 테슬라, 엔비디아\n"
+    "글자로도 돼요: 추가 삼성전자 / 삭제 JEPI / 분석 테슬라\n"
     "바뀐 목록은 다음 정기 분석부터 적용돼요.\n"
     "버튼 응답은 GitHub 실행 간격 때문에 몇 분 늦을 수 있어요."
 )
 ALIASES = {
     "목록": "/list", "추가": "/add", "삭제": "/remove", "설정": "/set", "도움말": "/help",
+    "분석": "/analyze",
     BTN_LIST: "/list", BTN_ADD: "/add", BTN_DEL: "/remove", BTN_HELP: "/help",
 }
 
@@ -102,19 +113,75 @@ def save_list(codes):
         gh("/actions/variables", "POST", {"name": VAR_NAME, "value": value})
 
 
+def start_analysis(codes):
+    """Run the analysis workflow for just these codes (stocks-only)."""
+    body = json.dumps({
+        "ref": "main",
+        "inputs": {"mode": "stocks-only", "force_run": "true", "stocks": ",".join(codes)},
+    }).encode()
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO}/actions/workflows/{ANALYSIS_WORKFLOW}/dispatches",
+        data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {ACTIONS_TOKEN or GH_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "telegram-stock-bot",
+            "Content-Type": "application/json",
+        },
+    )
+    urllib.request.urlopen(req, timeout=30).read()
+
+
+def lookup_name(name):
+    """Resolve a stock name (e.g. 삼성전자, 테슬라) via Naver's autocomplete.
+
+    Returns (code, display_name) or (None, None). Korean listings get the
+    .KS/.KQ suffix; US listings use the plain ticker.
+    """
+    url = "https://ac.stock.naver.com/ac?" + urllib.parse.urlencode({"q": name, "target": "stock"})
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            items = json.loads(resp.read()).get("items", [])
+    except Exception as exc:  # network or format problem: treat as not found
+        print(f"name lookup failed for {name!r}: {exc}")
+        return None, None
+    exact = [i for i in items if i.get("name", "").replace(" ", "") == name.replace(" ", "")]
+    for item in exact + items:
+        code, nation, market = item.get("code", ""), item.get("nationCode"), item.get("typeCode", "")
+        if nation == "KOR" and market in KR_SUFFIX and code:
+            return code + KR_SUFFIX[market], item.get("name", name)
+        if nation == "USA" and code:
+            return code.upper(), item.get("name", name)
+    return None, None
+
+
 # ---------------------------------------------------------------- pure logic
-def parse_codes(args):
-    codes, bad = [], []
+def parse_codes(args, resolver=None):
+    """Split args into codes. Hangul tokens are looked up by name.
+
+    Returns (codes, bad, found) where found lists "이름 → 코드" notes.
+    """
+    resolver = resolver or lookup_name
+    codes, bad, found = [], [], []
     for token in re.split(r"[\s,]+", args.strip()):
         if not token:
             continue
-        if CODE_RE.match(token):
+        if HANGUL_RE.search(token):
+            code, label = resolver(token)
+            if not code:
+                bad.append(token)
+                continue
+            found.append(f"{token} → {code}" + (f" ({label})" if label and label != token else ""))
+        elif CODE_RE.match(token):
             code = token if token.lower().startswith(("hk", "sh", "sz")) else token.upper()
-            if code not in codes:
-                codes.append(code)
         else:
             bad.append(token)
-    return codes, bad
+            continue
+        if code not in codes:
+            codes.append(code)
+    return codes, bad, found
 
 
 def fmt(codes):
@@ -150,11 +217,13 @@ def apply_change(cmd, new, codes):
     return "🔄 목록을 바꿨어요.", new
 
 
-def handle_text(text, codes, replying_to=""):
+def handle_text(text, codes, replying_to="", resolver=None, starter=None):
     """Return (reply_text, reply_markup, new_codes or None)."""
     text = text.strip()
     if replying_to.startswith(ADD_PROMPT[:10]):
         text = f"/add {text}"
+    elif replying_to.startswith(ANALYZE_PROMPT[:10]):
+        text = f"/analyze {text}"
     parts = text.split(maxsplit=1)
     cmd = parts[0].split("@")[0]
     cmd = ALIASES.get(text, ALIASES.get(cmd, cmd)).lower()
@@ -165,16 +234,27 @@ def handle_text(text, codes, replying_to=""):
     if cmd == "/help":
         return HELP, MAIN_KEYBOARD, None
     if cmd == "/add" and not args:
-        return ADD_PROMPT, {"force_reply": True, "input_field_placeholder": "예: NVDA 005930.KS"}, None
+        return ADD_PROMPT, {"force_reply": True, "input_field_placeholder": "예: NVDA 삼성전자"}, None
+    if cmd == "/analyze" and not args:
+        return ANALYZE_PROMPT, {"force_reply": True, "input_field_placeholder": "예: 테슬라 005930.KS"}, None
     if cmd == "/remove" and not args:
         if not codes:
             return "삭제할 종목이 없어요.", MAIN_KEYBOARD, None
         return "➖ 삭제할 종목을 누르세요.", delete_keyboard(codes), None
-    if cmd in ("/add", "/remove", "/set"):
-        new, bad = parse_codes(args)
-        note = f"\n⚠️ 형식이 이상해서 뺀 값: {', '.join(bad)}" if bad else ""
+    if cmd in ("/add", "/remove", "/set", "/analyze"):
+        new, bad, found = parse_codes(args, resolver)
+        note = f"\n⚠️ 찾지 못해서 뺀 값: {', '.join(bad)}" if bad else ""
+        if found:
+            note = "\n🔎 " + "\n🔎 ".join(found) + note
         if not new:
-            return f"종목 코드를 알아보지 못했어요.{note}", MAIN_KEYBOARD, None
+            return f"종목을 찾지 못했어요. 코드(예: 005930.KS)나 정확한 이름으로 보내 주세요.{note}", MAIN_KEYBOARD, None
+        if cmd == "/analyze":
+            try:
+                (starter or start_analysis)(new)
+            except urllib.error.HTTPError as exc:
+                return f"분석을 시작하지 못했어요 (HTTP {exc.code}).{note}", MAIN_KEYBOARD, None
+            return (f"🔍 분석 시작: {', '.join(new)}{note}\n\n"
+                    "10분쯤 뒤 리포트가 와요. 저장된 목록은 그대로예요."), MAIN_KEYBOARD, None
         head, result = apply_change(cmd, new, codes)
         if not result:
             return "목록을 비울 수는 없어요. 최소 1개는 남겨 주세요.", MAIN_KEYBOARD, None

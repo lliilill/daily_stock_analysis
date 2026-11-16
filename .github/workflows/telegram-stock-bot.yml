@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write   # start the analysis workflow for /analyze
 
 jobs:
   poll:
@@ -23,5 +24,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GH_VARIABLES_TOKEN: ${{ secrets.GH_VARIABLES_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           BOT_RUN_SECONDS: '540'   # keep listening ~9 min so buttons answer quickly
         run: python3 scripts/telegram_stock_bot.py
