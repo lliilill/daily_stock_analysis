@@ -1378,10 +1378,10 @@ def _capital_flow_bias_with_status(
 def _capital_flow_status_for_stability(reason: str, language: str) -> str:
     normalized = str(reason or "").strip().lower()
     if "not_supported" in normalized or "unsupported" in normalized or "not available" in normalized:
-        return "市场资金流服务暂不支持" if language == "zh" else "Capital flow source unsupported"
+        return {"zh": "市场资金流服务暂不支持", "ko": "자금 흐름 데이터 미지원"}.get(language, "Capital flow source unsupported")
     if "empty_stock_flow" in normalized or "missing" in normalized:
-        return "资金流数据缺失" if language == "zh" else "capital flow data unavailable"
-    return "资金流数据不可用" if language == "zh" else "capital flow unavailable"
+        return {"zh": "资金流数据缺失", "ko": "자금 흐름 데이터 없음"}.get(language, "capital flow data unavailable")
+    return {"zh": "资金流数据不可用", "ko": "자금 흐름 데이터 사용 불가"}.get(language, "capital flow unavailable")
 
 
 def _set_decision_stability_unavailable(
@@ -1397,7 +1397,7 @@ def _set_decision_stability_unavailable(
     result.dashboard = dashboard
     dashboard["decision_stability"] = {
         "applied": False,
-        "reason": "资金流不可用，未使用资金流校准" if language == "zh" else "Capital flow unavailable; stability calibration not applied",
+        "reason": {"zh": "资金流不可用，未使用资金流校准", "ko": "자금 흐름 데이터가 없어 안정성 보정을 적용하지 않았습니다"}.get(language, "Capital flow unavailable; stability calibration not applied"),
         "capital_flow_status": _capital_flow_status_for_stability(flow_status, language),
         "current_price": current_price,
         "support": support,
@@ -1473,7 +1473,7 @@ def _apply_hold_watch_dashboard(
     if not isinstance(core, dict):
         core = {}
         dashboard["core_conclusion"] = core
-    core["signal_type"] = "🟡持有观望" if language == "zh" else "🟡 Hold / Watch"
+    core["signal_type"] = {"zh": "🟡持有观望", "ko": "🟡 보유 / 관망"}.get(language, "🟡 Hold / Watch")
     core["one_sentence"] = f"{advice}：{reason}" if language == "zh" else f"{advice}: {reason}"
 
     position_advice = core.get("position_advice")
@@ -1522,6 +1522,12 @@ def _downgrade_buy_without_capital_flow(
         no_position = "空仓先不追买，等待资金流恢复、支撑确认或有效突破后再行动。"
         has_position = "持仓以关键支撑为风控线，资金流恢复前控制仓位。"
         confidence = "低"
+    elif language == "ko":
+        advice = "보유 관찰"
+        reason = f"{status_text}: 매수 결론에 자금 흐름 확인이 없어 우선 관찰로 처리합니다."
+        no_position = "미보유 시 추격 매수하지 말고, 자금 흐름 회복·지지 확인·유효한 돌파를 기다리세요."
+        has_position = "보유 시 핵심 지지선을 리스크 관리선으로 삼고, 자금 흐름이 회복될 때까지 비중을 조절하세요."
+        confidence = "낮음"
     else:
         advice = "Hold and watch"
         reason = f"{status_text}; the buy call lacks capital-flow confirmation, so treat it as watch-only."
